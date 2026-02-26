@@ -99,13 +99,32 @@ export async function loadVaultFromFile(
     let decrypted: string;
     let vaultData: VaultData;
 
-    try {
-      decrypted = await decryptData(encrypted, masterPassword, deviceId);
-      vaultData = JSON.parse(decrypted);
-    } catch (firstError) {
-      const fingerprint = await generateDeviceFingerprint();
-      decrypted = await decryptData(encrypted, masterPassword, fingerprint.hash);
-      vaultData = JSON.parse(decrypted);
+    const fingerprint = await generateDeviceFingerprint();
+    const OLD_ITERATIONS = 700000;
+    const NEW_ITERATIONS = 1000000;
+
+    const decryptionAttempts = [
+      { id: deviceId, iterations: NEW_ITERATIONS, desc: 'new device ID with 1M iterations' },
+      { id: deviceId, iterations: OLD_ITERATIONS, desc: 'new device ID with 700K iterations' },
+      { id: fingerprint.hash, iterations: OLD_ITERATIONS, desc: 'old fingerprint with 700K iterations' },
+      { id: fingerprint.hash, iterations: NEW_ITERATIONS, desc: 'old fingerprint with 1M iterations' },
+    ];
+
+    let lastError: Error | null = null;
+
+    for (const attempt of decryptionAttempts) {
+      try {
+        decrypted = await decryptData(encrypted, masterPassword, attempt.id, attempt.iterations);
+        vaultData = JSON.parse(decrypted);
+        break;
+      } catch (error) {
+        lastError = error as Error;
+        continue;
+      }
+    }
+
+    if (!decrypted! || !vaultData!) {
+      throw lastError || new Error('All decryption attempts failed');
     }
 
     if (!vaultData.trustedDeviceIds) {
