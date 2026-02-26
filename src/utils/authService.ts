@@ -295,33 +295,67 @@ export const authService = {
             user_id: userId,
             device_fingerprint: fingerprint,
             device_name: deviceName,
-            is_authorized: false,
+            is_authorized: true,
           })
           .select()
           .single();
+
+        if (!newDevice) {
+          return { success: false, error: 'Failed to register new device' };
+        }
 
         await supabase
           .from('activity_logs')
           .insert({
             user_id: userId,
-            device_id: newDevice?.id,
-            action_type: 'new_device_detected',
-            details: { email, device_name: deviceName, needs_approval: true },
+            device_id: newDevice.id,
+            action_type: 'new_device_auto_authorized',
+            details: { email, device_name: deviceName },
+          });
+
+        await supabase
+          .from('devices')
+          .update({ last_access: new Date().toISOString() })
+          .eq('id', newDevice.id);
+
+        await supabase
+          .from('activity_logs')
+          .insert({
+            user_id: userId,
+            device_id: newDevice.id,
+            action_type: 'vault_opened',
+            details: { email },
           });
 
         return {
-          success: false,
-          error: 'New device detected. Please authorize this device from an existing authorized device.',
-          needsDeviceApproval: true,
+          success: true,
+          user: {
+            id: userId,
+            email,
+            deviceId: newDevice.id,
+            deviceFingerprint: fingerprint,
+          },
         };
       }
 
       if (!device.is_authorized) {
-        return {
-          success: false,
-          error: 'This device is not authorized. Please authorize it from another device.',
-          needsDeviceApproval: true,
-        };
+        const { error: authError } = await supabase
+          .from('devices')
+          .update({ is_authorized: true })
+          .eq('id', device.id);
+
+        if (authError) {
+          return { success: false, error: 'Failed to authorize device' };
+        }
+
+        await supabase
+          .from('activity_logs')
+          .insert({
+            user_id: userId,
+            device_id: device.id,
+            action_type: 'device_auto_authorized',
+            details: { email },
+          });
       }
 
       await supabase
