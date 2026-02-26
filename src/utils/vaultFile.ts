@@ -1,5 +1,6 @@
 import { VaultData, createEmptyVault } from '../types/vault';
 import { encryptData, decryptData, EncryptedData } from './crypto';
+import { generateDeviceFingerprint } from './fingerprint';
 
 const VAULT_FILE_EXTENSION = '.vault';
 const VAULT_FILE_DESCRIPTION = 'Ironclad Vault File';
@@ -67,11 +68,11 @@ export async function saveVaultToFile(
   handle: FileSystemFileHandle,
   vaultData: VaultData,
   masterPassword: string,
-  hardwareFingerprint: string
+  deviceId: string
 ): Promise<void> {
   const jsonData = JSON.stringify(vaultData, null, 2);
 
-  const encrypted = await encryptData(jsonData, masterPassword, hardwareFingerprint);
+  const encrypted = await encryptData(jsonData, masterPassword, deviceId);
 
   const encryptedJson = JSON.stringify(encrypted);
 
@@ -83,7 +84,7 @@ export async function saveVaultToFile(
 export async function loadVaultFromFile(
   handle: FileSystemFileHandle,
   masterPassword: string,
-  hardwareFingerprint: string
+  deviceId: string
 ): Promise<VaultData> {
   const file = await handle.getFile();
   const text = await file.text();
@@ -95,12 +96,44 @@ export async function loadVaultFromFile(
   try {
     const encrypted: EncryptedData = JSON.parse(text);
 
-    const decrypted = await decryptData(encrypted, masterPassword, hardwareFingerprint);
+    let decrypted: string;
+    let vaultData: VaultData;
 
-    const vaultData: VaultData = JSON.parse(decrypted);
+    try {
+      decrypted = await decryptData(encrypted, masterPassword, deviceId);
+      vaultData = JSON.parse(decrypted);
+    } catch (firstError) {
+      const fingerprint = await generateDeviceFingerprint();
+      decrypted = await decryptData(encrypted, masterPassword, fingerprint.hash);
+      vaultData = JSON.parse(decrypted);
+    }
+
+    if (!vaultData.trustedDeviceIds) {
+      vaultData.trustedDeviceIds = [];
+    }
+
+    if (!vaultData.securitySettings.autoLockMinutes) {
+      vaultData.securitySettings.autoLockMinutes = 15;
+    }
+
+    if (vaultData.securitySettings.requireReauthForView === undefined) {
+      vaultData.securitySettings.requireReauthForView = true;
+    }
+
+    if (!vaultData.securitySettings.reauthIntervalMinutes) {
+      vaultData.securitySettings.reauthIntervalMinutes = 30;
+    }
+
+    if (vaultData.biometricEnabled === undefined) {
+      vaultData.biometricEnabled = false;
+    }
 
     if (!vaultData.cards) {
       vaultData.cards = [];
+    }
+
+    if (vaultData.version !== '2.0.0') {
+      vaultData.version = '2.0.0';
     }
 
     return vaultData;

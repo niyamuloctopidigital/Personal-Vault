@@ -1,6 +1,5 @@
 import { useState } from 'react';
-import { Lock, Fingerprint, X } from 'lucide-react';
-import { authenticateWithBiometric, isBiometricAvailable } from '../utils/biometric';
+import { Lock, X } from 'lucide-react';
 
 interface ReauthPromptProps {
   onAuthenticate: (password: string) => Promise<boolean>;
@@ -12,11 +11,6 @@ export function ReauthPrompt({ onAuthenticate, onCancel, message }: ReauthPrompt
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [biometricAvailable, setBiometricAvailable] = useState(false);
-
-  useState(() => {
-    isBiometricAvailable().then(setBiometricAvailable);
-  });
 
   const handlePasswordAuth = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -36,32 +30,6 @@ export function ReauthPrompt({ onAuthenticate, onCancel, message }: ReauthPrompt
       }
     } catch (err: any) {
       setError(err.message || 'Authentication failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleBiometricAuth = async () => {
-    setLoading(true);
-    setError('');
-
-    try {
-      const success = await authenticateWithBiometric();
-      if (success) {
-        const storedPassword = sessionStorage.getItem('vault_master_password');
-        if (storedPassword) {
-          const authSuccess = await onAuthenticate(storedPassword);
-          if (!authSuccess) {
-            setError('Authentication failed');
-          }
-        } else {
-          setError('Please authenticate with password first');
-        }
-      } else {
-        setError('Biometric authentication failed');
-      }
-    } catch (err) {
-      setError('Biometric authentication error');
     } finally {
       setLoading(false);
     }
@@ -129,28 +97,6 @@ export function ReauthPrompt({ onAuthenticate, onCancel, message }: ReauthPrompt
               </button>
             </div>
           </form>
-
-          {biometricAvailable && (
-            <>
-              <div className="relative my-4">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-slate-700"></div>
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-slate-800 text-slate-400">Or</span>
-                </div>
-              </div>
-
-              <button
-                onClick={handleBiometricAuth}
-                disabled={loading}
-                className="w-full bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:cursor-not-allowed text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
-              >
-                <Fingerprint className="w-5 h-5" />
-                Use Biometrics
-              </button>
-            </>
-          )}
         </div>
       </div>
     </div>

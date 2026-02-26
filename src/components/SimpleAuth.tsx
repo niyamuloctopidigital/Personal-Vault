@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Shield, Lock, Unlock, Fingerprint, HardDrive, AlertCircle } from 'lucide-react';
-import { isBiometricAvailable, authenticateWithBiometric, registerBiometric } from '../utils/biometric';
+import { Shield, Lock, Unlock, HardDrive, AlertCircle } from 'lucide-react';
 import { getOrCreateDeviceId, getDeviceName } from '../utils/deviceId';
 
 interface SimpleAuthProps {
@@ -17,11 +16,9 @@ export function SimpleAuth({ onUnlock, lockStatus }: SimpleAuthProps) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [biometricSupported, setBiometricSupported] = useState(false);
   const [deviceInfo, setDeviceInfo] = useState({ id: '', name: '' });
 
   useEffect(() => {
-    checkBiometric();
     loadDeviceInfo();
   }, []);
 
@@ -29,34 +26,6 @@ export function SimpleAuth({ onUnlock, lockStatus }: SimpleAuthProps) {
     const id = await getOrCreateDeviceId();
     const name = await getDeviceName();
     setDeviceInfo({ id: id.substring(0, 16) + '...', name });
-  };
-
-  const checkBiometric = async () => {
-    const supported = await isBiometricAvailable();
-    setBiometricSupported(supported);
-  };
-
-  const handleBiometricUnlock = async () => {
-    setLoading(true);
-    setError('');
-
-    try {
-      const success = await authenticateWithBiometric();
-      if (success) {
-        const storedPassword = sessionStorage.getItem('vault_master_password');
-        if (storedPassword) {
-          await onUnlock(storedPassword, false);
-        } else {
-          setError('Please unlock with password first to enable biometric authentication');
-        }
-      } else {
-        setError('Biometric authentication failed');
-      }
-    } catch (err) {
-      setError('Biometric authentication error');
-    } finally {
-      setLoading(false);
-    }
   };
 
   const handlePasswordUnlock = async (e: React.FormEvent) => {
@@ -83,13 +52,6 @@ export function SimpleAuth({ onUnlock, lockStatus }: SimpleAuthProps) {
 
     try {
       await onUnlock(masterPassword, mode === 'create');
-
-      sessionStorage.setItem('vault_master_password', masterPassword);
-
-      if (biometricSupported && mode === 'create') {
-        const deviceId = await getOrCreateDeviceId();
-        await registerBiometric(deviceId);
-      }
     } catch (err: any) {
       setError(err.message || 'Failed to unlock vault');
     } finally {
@@ -222,28 +184,6 @@ export function SimpleAuth({ onUnlock, lockStatus }: SimpleAuthProps) {
               {loading ? 'Please wait...' : mode === 'create' ? 'Create Vault' : 'Unlock Vault'}
             </button>
           </form>
-
-          {biometricSupported && mode === 'unlock' && (
-            <>
-              <div className="relative my-6">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-slate-700"></div>
-                </div>
-                <div className="relative flex justify-center text-sm">
-                  <span className="px-2 bg-slate-800 text-slate-400">Or</span>
-                </div>
-              </div>
-
-              <button
-                onClick={handleBiometricUnlock}
-                disabled={isLocked || loading}
-                className="w-full bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:cursor-not-allowed text-white font-medium py-3 px-4 rounded-lg transition-colors flex items-center justify-center gap-2"
-              >
-                <Fingerprint className="w-5 h-5" />
-                Unlock with Biometrics
-              </button>
-            </>
-          )}
 
           <div className="mt-6 text-center text-xs text-slate-500">
             <p>All data is encrypted locally on your device</p>
