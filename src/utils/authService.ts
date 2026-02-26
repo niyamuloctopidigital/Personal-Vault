@@ -238,17 +238,16 @@ export const authService = {
       });
 
       if (authResult.error) {
-        console.error('Supabase auth error:', authResult.error);
         await supabase
           .from('activity_logs')
           .insert({
             user_id: null,
             device_id: null,
             action_type: 'vault_open_failed',
-            details: { email, reason: 'Invalid credentials', error: authResult.error.message },
+            details: { email, reason: 'Invalid credentials' },
           });
 
-        return { success: false, error: `Authentication failed: ${authResult.error.message}` };
+        return { success: false, error: 'Invalid email or password' };
       }
 
       const userId = authResult.data.user.id;
@@ -264,16 +263,16 @@ export const authService = {
       }
 
       if (user.master_password_hash !== passwordHash) {
-        console.error('Password hash mismatch');
-        console.log('Stored hash:', user.master_password_hash.substring(0, 20) + '...');
-        console.log('Computed hash:', passwordHash.substring(0, 20) + '...');
-
         await supabase
-          .from('users')
-          .update({ master_password_hash: passwordHash })
-          .eq('id', userId);
+          .from('activity_logs')
+          .insert({
+            user_id: userId,
+            device_id: null,
+            action_type: 'vault_open_failed',
+            details: { email, reason: 'Invalid master password' },
+          });
 
-        console.log('Updated password hash to match current password');
+        return { success: false, error: 'Invalid master password' };
       }
 
       const { data: device, error: deviceError } = await supabase
@@ -296,67 +295,33 @@ export const authService = {
             user_id: userId,
             device_fingerprint: fingerprint,
             device_name: deviceName,
-            is_authorized: true,
+            is_authorized: false,
           })
           .select()
           .single();
 
-        if (!newDevice) {
-          return { success: false, error: 'Failed to register new device' };
-        }
-
         await supabase
           .from('activity_logs')
           .insert({
             user_id: userId,
-            device_id: newDevice.id,
-            action_type: 'new_device_auto_authorized',
-            details: { email, device_name: deviceName },
-          });
-
-        await supabase
-          .from('devices')
-          .update({ last_access: new Date().toISOString() })
-          .eq('id', newDevice.id);
-
-        await supabase
-          .from('activity_logs')
-          .insert({
-            user_id: userId,
-            device_id: newDevice.id,
-            action_type: 'vault_opened',
-            details: { email },
+            device_id: newDevice?.id,
+            action_type: 'new_device_detected',
+            details: { email, device_name: deviceName, needs_approval: true },
           });
 
         return {
-          success: true,
-          user: {
-            id: userId,
-            email,
-            deviceId: newDevice.id,
-            deviceFingerprint: fingerprint,
-          },
+          success: false,
+          error: 'New device detected. Please authorize this device from an existing authorized device.',
+          needsDeviceApproval: true,
         };
       }
 
       if (!device.is_authorized) {
-        const { error: authError } = await supabase
-          .from('devices')
-          .update({ is_authorized: true })
-          .eq('id', device.id);
-
-        if (authError) {
-          return { success: false, error: 'Failed to authorize device' };
-        }
-
-        await supabase
-          .from('activity_logs')
-          .insert({
-            user_id: userId,
-            device_id: device.id,
-            action_type: 'device_auto_authorized',
-            details: { email },
-          });
+        return {
+          success: false,
+          error: 'This device is not authorized. Please authorize it from another device.',
+          needsDeviceApproval: true,
+        };
       }
 
       await supabase

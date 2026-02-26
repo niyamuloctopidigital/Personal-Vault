@@ -71,7 +71,7 @@ export async function saveVaultToFile(
 ): Promise<void> {
   const jsonData = JSON.stringify(vaultData, null, 2);
 
-  const encrypted = await encryptData(jsonData, masterPassword, '');
+  const encrypted = await encryptData(jsonData, masterPassword, hardwareFingerprint);
 
   const encryptedJson = JSON.stringify(encrypted);
 
@@ -95,7 +95,7 @@ export async function loadVaultFromFile(
   try {
     const encrypted: EncryptedData = JSON.parse(text);
 
-    const decrypted = await decryptData(encrypted, masterPassword, '');
+    const decrypted = await decryptData(encrypted, masterPassword, hardwareFingerprint);
 
     const vaultData: VaultData = JSON.parse(decrypted);
 
