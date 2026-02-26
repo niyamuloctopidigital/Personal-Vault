@@ -94,75 +94,10 @@ export async function loadVaultFromFile(
   }
 
   try {
-    console.log('=== VAULT FILE ANALYSIS ===');
-    console.log('Raw text length:', text.length);
-    console.log('First 200 chars:', text.substring(0, 200));
-
     const encrypted: EncryptedData = JSON.parse(text);
 
-    console.log('Encrypted data structure:', {
-      hasIv: !!encrypted.iv,
-      hasSalt: !!encrypted.salt,
-      hasCiphertext: !!encrypted.ciphertext,
-      ivLength: encrypted.iv?.length,
-      saltLength: encrypted.salt?.length,
-      ciphertextLength: encrypted.ciphertext?.length
-    });
-
-    let decrypted: string;
-    let vaultData: VaultData;
-
-    const fingerprint = await generateDeviceFingerprint();
-    const ORIGINAL_ITERATIONS = 100000;
-    const OLD_ITERATIONS = 700000;
-    const NEW_ITERATIONS = 1000000;
-
-    console.log('=== DECRYPTION DEBUG ===');
-    console.log('Current deviceId:', deviceId);
-    console.log('Hardware fingerprint:', fingerprint.hash);
-    console.log('Password length:', masterPassword.length);
-
-    // Try to use password as salt (maybe original version didn't use device ID at all?)
-    const decryptionAttempts = [
-      { id: deviceId, iterations: NEW_ITERATIONS, desc: 'new device ID with 1M iterations' },
-      { id: deviceId, iterations: OLD_ITERATIONS, desc: 'new device ID with 700K iterations' },
-      { id: deviceId, iterations: ORIGINAL_ITERATIONS, desc: 'new device ID with 100K iterations (original)' },
-      { id: fingerprint.hash, iterations: ORIGINAL_ITERATIONS, desc: 'old fingerprint with 100K iterations (original)' },
-      { id: fingerprint.hash, iterations: OLD_ITERATIONS, desc: 'old fingerprint with 700K iterations' },
-      { id: fingerprint.hash, iterations: NEW_ITERATIONS, desc: 'old fingerprint with 1M iterations' },
-      { id: '', iterations: ORIGINAL_ITERATIONS, desc: 'empty device ID with 100K iterations' },
-      { id: masterPassword, iterations: ORIGINAL_ITERATIONS, desc: 'password as ID with 100K iterations' },
-    ];
-
-    let lastError: Error | null = null;
-    let successfulAttempt: string | null = null;
-
-    for (const attempt of decryptionAttempts) {
-      try {
-        console.log(`Trying: ${attempt.desc}`);
-        console.log(`  - ID: ${attempt.id.substring(0, 20)}...`);
-        console.log(`  - Iterations: ${attempt.iterations}`);
-
-        decrypted = await decryptData(encrypted, masterPassword, attempt.id, attempt.iterations);
-        vaultData = JSON.parse(decrypted);
-        successfulAttempt = attempt.desc;
-        console.log(`SUCCESS with: ${attempt.desc}`);
-        break;
-      } catch (error) {
-        console.log(`  FAILED: ${(error as Error).message}`);
-        lastError = error as Error;
-        continue;
-      }
-    }
-
-    if (!decrypted! || !vaultData!) {
-      console.error('All decryption attempts failed');
-      console.error('Last error:', lastError);
-      throw lastError || new Error('All decryption attempts failed');
-    }
-
-    console.log('Vault decrypted successfully');
-    console.log('======================');
+    const decrypted = await decryptData(encrypted, masterPassword, deviceId);
+    const vaultData: VaultData = JSON.parse(decrypted);
 
     if (!vaultData.trustedDeviceIds) {
       vaultData.trustedDeviceIds = [];
