@@ -67,11 +67,11 @@ export async function saveVaultToFile(
   handle: FileSystemFileHandle,
   vaultData: VaultData,
   masterPassword: string,
-  deviceId: string
+  hardwareFingerprint: string
 ): Promise<void> {
   const jsonData = JSON.stringify(vaultData, null, 2);
 
-  const encrypted = await encryptData(jsonData, masterPassword, deviceId);
+  const encrypted = await encryptData(jsonData, masterPassword, hardwareFingerprint);
 
   const encryptedJson = JSON.stringify(encrypted);
 
@@ -83,7 +83,7 @@ export async function saveVaultToFile(
 export async function loadVaultFromFile(
   handle: FileSystemFileHandle,
   masterPassword: string,
-  deviceId: string
+  hardwareFingerprint: string
 ): Promise<VaultData> {
   const file = await handle.getFile();
   const text = await file.text();
@@ -95,35 +95,12 @@ export async function loadVaultFromFile(
   try {
     const encrypted: EncryptedData = JSON.parse(text);
 
-    const decrypted = await decryptData(encrypted, masterPassword, deviceId);
+    const decrypted = await decryptData(encrypted, masterPassword, hardwareFingerprint);
+
     const vaultData: VaultData = JSON.parse(decrypted);
-
-    if (!vaultData.trustedDeviceIds) {
-      vaultData.trustedDeviceIds = [];
-    }
-
-    if (!vaultData.securitySettings.autoLockMinutes) {
-      vaultData.securitySettings.autoLockMinutes = 15;
-    }
-
-    if (vaultData.securitySettings.requireReauthForView === undefined) {
-      vaultData.securitySettings.requireReauthForView = true;
-    }
-
-    if (!vaultData.securitySettings.reauthIntervalMinutes) {
-      vaultData.securitySettings.reauthIntervalMinutes = 30;
-    }
-
-    if (vaultData.biometricEnabled === undefined) {
-      vaultData.biometricEnabled = false;
-    }
 
     if (!vaultData.cards) {
       vaultData.cards = [];
-    }
-
-    if (vaultData.version !== '2.0.0') {
-      vaultData.version = '2.0.0';
     }
 
     return vaultData;

@@ -1,4 +1,4 @@
-const PBKDF2_ITERATIONS = 1000000;
+const PBKDF2_ITERATIONS = 700000;
 const KEY_LENGTH = 256;
 const SALT_LENGTH = 32;
 const IV_LENGTH = 12;
@@ -31,8 +31,7 @@ function base64ToArrayBuffer(base64: string): ArrayBuffer {
 export async function deriveKey(
   masterPassword: string,
   hardwareFingerprint: string,
-  salt: Uint8Array,
-  iterations: number = PBKDF2_ITERATIONS
+  salt: Uint8Array
 ): Promise<CryptoKey> {
   const combinedSecret = `${masterPassword}::${hardwareFingerprint}`;
   const keyMaterial = await crypto.subtle.importKey(
@@ -47,7 +46,7 @@ export async function deriveKey(
     {
       name: 'PBKDF2',
       salt: salt,
-      iterations: iterations,
+      iterations: PBKDF2_ITERATIONS,
       hash: 'SHA-256',
     },
     keyMaterial,
@@ -90,14 +89,13 @@ export async function encryptData(
 export async function decryptData(
   encrypted: EncryptedData,
   masterPassword: string,
-  hardwareFingerprint: string,
-  iterations?: number
+  hardwareFingerprint: string
 ): Promise<string> {
   const salt = new Uint8Array(base64ToArrayBuffer(encrypted.salt));
   const iv = new Uint8Array(base64ToArrayBuffer(encrypted.iv));
   const ciphertext = base64ToArrayBuffer(encrypted.ciphertext);
 
-  const key = await deriveKey(masterPassword, hardwareFingerprint, salt, iterations);
+  const key = await deriveKey(masterPassword, hardwareFingerprint, salt);
 
   try {
     const decrypted = await crypto.subtle.decrypt(

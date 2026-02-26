@@ -60,7 +60,6 @@ export interface VaultData {
   createdAt: number;
   updatedAt: number;
   deviceSlots: DeviceSlot[];
-  trustedDeviceIds: string[];
   folders: Folder[];
   passwords: PasswordEntry[];
   cards: CardEntry[];
@@ -72,20 +71,15 @@ export interface VaultData {
     failedAttemptCount: number;
     isLocked: boolean;
     lockUntil: number;
-    autoLockMinutes: number;
-    requireReauthForView: boolean;
-    reauthIntervalMinutes: number;
   };
-  biometricEnabled: boolean;
 }
 
 export function createEmptyVault(): VaultData {
   return {
-    version: '2.0.0',
+    version: '1.0.0',
     createdAt: Date.now(),
     updatedAt: Date.now(),
     deviceSlots: [],
-    trustedDeviceIds: [],
     folders: [],
     passwords: [],
     cards: [],
@@ -97,10 +91,6 @@ export function createEmptyVault(): VaultData {
       failedAttemptCount: 0,
       isLocked: false,
       lockUntil: 0,
-      autoLockMinutes: 15,
-      requireReauthForView: true,
-      reauthIntervalMinutes: 30,
     },
-    biometricEnabled: false,
   };
 }
