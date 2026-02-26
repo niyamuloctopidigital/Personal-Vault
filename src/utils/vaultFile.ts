@@ -1,6 +1,5 @@
 import { VaultData, createEmptyVault } from '../types/vault';
 import { encryptData, decryptData, EncryptedData } from './crypto';
-import { generateDeviceFingerprint } from './fingerprint';
 
 const VAULT_FILE_EXTENSION = '.vault';
 const VAULT_FILE_DESCRIPTION = 'Ironclad Vault File';
