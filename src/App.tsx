@@ -1,10 +1,9 @@
-import { useState, useEffect, useCallback } from 'react';
-import { LoginRegister } from './components/LoginRegister';
-import { Auth } from './components/Auth';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { SimpleAuth } from './components/SimpleAuth';
 import { PasswordManager } from './components/PasswordManager';
 import { ActivityLogs } from './components/ActivityLogs';
-import { DeviceManager } from './components/DeviceManager';
-import { generateDeviceFingerprint } from './utils/fingerprint';
+import { ReauthPrompt } from './components/ReauthPrompt';
+import { getOrCreateDeviceId, getDeviceName } from './utils/deviceId';
 import { createEmptyVault } from './types/vault';
 import type { VaultData, PasswordEntry, CardEntry, Folder } from './types/vault';
 import {
@@ -18,33 +17,34 @@ import {
   checkIfLocked,
   recordFailedAttempt,
   resetFailedAttempts,
-  unlockVault,
-  canAccessVault,
-  registerDevice,
 } from './utils/security';
 import { logActivity } from './utils/activityLogger';
 import { secureWipe } from './utils/crypto';
-import { authService, AuthUser } from './utils/authService';
+import { AutoLockManager } from './utils/autoLock';
+import { isTrustedDevice } from './utils/deviceId';
 
-type View = 'login' | 'vault-auth' | 'vault' | 'logs' | 'devices';
+type View = 'auth' | 'vault' | 'logs';
 
 function App() {
-  const [view, setView] = useState<View>('login');
-  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [view, setView] = useState<View>('auth');
   const [vault, setVault] = useState<VaultData | null>(null);
   const [fileHandle, setFileHandle] = useState<FileSystemFileHandle | null>(null);
   const [masterPassword, setMasterPassword] = useState('');
-  const [deviceFingerprint, setDeviceFingerprint] = useState('');
+  const [deviceId, setDeviceId] = useState('');
   const [error, setError] = useState('');
   const [isSupported, setIsSupported] = useState(true);
+  const [showReauth, setShowReauth] = useState(false);
+  const [reauthCallback, setReauthCallback] = useState<(() => void) | null>(null);
+  const [lastReauth, setLastReauth] = useState(Date.now());
+  const autoLockManager = useRef<AutoLockManager | null>(null);
 
   useEffect(() => {
     const init = async () => {
       const supported = await verifyFileSystemAccess();
       setIsSupported(supported);
 
-      const fingerprint = await generateDeviceFingerprint();
-      setDeviceFingerprint(fingerprint.hash);
+      const id = await getOrCreateDeviceId();
+      setDeviceId(id);
     };
 
     init();
@@ -53,115 +53,145 @@ function App() {
       if (masterPassword) {
         secureWipe({ masterPassword });
       }
+      if (autoLockManager.current) {
+        autoLockManager.current.destroy();
+      }
     };
   }, []);
 
+  const handleAutoLock = useCallback(() => {
+    secureWipe({ masterPassword });
+    setMasterPassword('');
+    setVault(null);
+    setView('auth');
+    sessionStorage.removeItem('vault_master_password');
+  }, [masterPassword]);
+
   const saveVault = useCallback(async (updatedVault: VaultData) => {
-    if (!fileHandle || !masterPassword || !deviceFingerprint) return;
+    if (!fileHandle || !masterPassword || !deviceId) return;
 
     try {
-      await saveVaultToFile(fileHandle, updatedVault, masterPassword, deviceFingerprint);
+      await saveVaultToFile(fileHandle, updatedVault, masterPassword, deviceId);
       setVault(updatedVault);
     } catch (err: any) {
       setError(err.message || 'Failed to save vault');
     }
-  }, [fileHandle, masterPassword, deviceFingerprint]);
+  }, [fileHandle, masterPassword, deviceId]);
 
-  const handleCreateVault = async (password: string, deviceName: string) => {
-    try {
-      setError('');
+  const requireReauth = useCallback((callback: () => void) => {
+    const now = Date.now();
+    const reauthInterval = (vault?.securitySettings.reauthIntervalMinutes || 30) * 60 * 1000;
 
-      const handle = await createNewVaultFile();
-      if (!handle) return;
-
-      let newVault = createEmptyVault();
-
-      newVault = registerDevice(newVault, deviceName, deviceFingerprint);
-
-      newVault = logActivity(newVault, 'device_registered', `Device "${deviceName}" registered`, deviceFingerprint);
-
-      await saveVaultToFile(handle, newVault, password, deviceFingerprint);
-
-      setFileHandle(handle);
-      setVault(newVault);
-      setMasterPassword(password);
-      setView('vault');
-    } catch (err: any) {
-      setError(err.message || 'Failed to create vault');
+    if (vault?.securitySettings.requireReauthForView && now - lastReauth > reauthInterval) {
+      setReauthCallback(() => callback);
+      setShowReauth(true);
+    } else {
+      callback();
     }
-  };
+  }, [vault, lastReauth]);
 
-  const handleOpenVault = async (password: string) => {
+  const handleReauthSuccess = useCallback(async (password: string): Promise<boolean> => {
+    if (password === masterPassword) {
+      setLastReauth(Date.now());
+      setShowReauth(false);
+      if (reauthCallback) {
+        reauthCallback();
+        setReauthCallback(null);
+      }
+      return true;
+    }
+    return false;
+  }, [masterPassword, reauthCallback]);
+
+  const handleUnlock = async (password: string, createNew: boolean) => {
     try {
       setError('');
 
-      let handle = fileHandle;
-      if (!handle) {
-        handle = await openExistingVaultFile();
+      if (createNew) {
+        const handle = await createNewVaultFile();
         if (!handle) return;
+
+        let newVault = createEmptyVault();
+
+        const deviceName = await getDeviceName();
+        newVault.trustedDeviceIds = [deviceId];
+
+        newVault = logActivity(newVault, 'device_registered', `Device "${deviceName}" registered`, deviceId);
+
+        await saveVaultToFile(handle, newVault, password, deviceId);
+
         setFileHandle(handle);
-      }
+        setVault(newVault);
+        setMasterPassword(password);
+        setView('vault');
 
-      const loadedVault = await loadVaultFromFile(handle, password, deviceFingerprint);
+        if (!autoLockManager.current) {
+          autoLockManager.current = new AutoLockManager(newVault.securitySettings.autoLockMinutes);
+        }
+        autoLockManager.current.start(handleAutoLock);
+      } else {
+        let handle = fileHandle;
+        if (!handle) {
+          handle = await openExistingVaultFile();
+          if (!handle) return;
+          setFileHandle(handle);
+        }
 
-      const lockStatus = checkIfLocked(loadedVault);
-      if (lockStatus.isLocked) {
-        setVault(loadedVault);
-        setError(`Vault is locked for ${lockStatus.remainingTime} more minutes`);
-        return;
-      }
+        const loadedVault = await loadVaultFromFile(handle, password, deviceId);
 
-      if (!canAccessVault(loadedVault, deviceFingerprint)) {
-        setError('This device is not authorized. Maximum device limit reached.');
-        return;
-      }
+        const lockStatus = checkIfLocked(loadedVault);
+        if (lockStatus.isLocked) {
+          setVault(loadedVault);
+          throw new Error(`Vault is locked for ${lockStatus.remainingTime} more minutes`);
+        }
 
-      let updatedVault = loadedVault;
+        const isTrusted = await isTrustedDevice(loadedVault.trustedDeviceIds);
 
-      if (loadedVault.deviceSlots.length > 0) {
-        const hasDevice = loadedVault.deviceSlots.some(
-          (slot) => slot.fingerprint === deviceFingerprint
-        );
+        let updatedVault = loadedVault;
 
-        if (!hasDevice) {
-          const deviceName = `Device ${loadedVault.deviceSlots.length + 1}`;
-          updatedVault = registerDevice(updatedVault, deviceName, deviceFingerprint);
+        if (!isTrusted) {
+          updatedVault.trustedDeviceIds.push(deviceId);
+          const deviceName = await getDeviceName();
           updatedVault = logActivity(
             updatedVault,
             'device_registered',
             `New device registered: ${deviceName}`,
-            deviceFingerprint
+            deviceId
           );
-        } else {
-          updatedVault = registerDevice(updatedVault, '', deviceFingerprint);
         }
+
+        updatedVault = resetFailedAttempts(updatedVault);
+
+        updatedVault = logActivity(
+          updatedVault,
+          'login_success',
+          'Successful vault unlock',
+          deviceId
+        );
+
+        await saveVaultToFile(handle, updatedVault, password, deviceId);
+
+        setVault(updatedVault);
+        setMasterPassword(password);
+        setView('vault');
+        setLastReauth(Date.now());
+
+        if (!autoLockManager.current) {
+          autoLockManager.current = new AutoLockManager(updatedVault.securitySettings.autoLockMinutes);
+        }
+        autoLockManager.current.start(handleAutoLock);
       }
-
-      updatedVault = resetFailedAttempts(updatedVault);
-
-      updatedVault = logActivity(
-        updatedVault,
-        'login_success',
-        'Successful vault unlock',
-        deviceFingerprint
-      );
-
-      await saveVaultToFile(handle, updatedVault, password, deviceFingerprint);
-
-      setVault(updatedVault);
-      setMasterPassword(password);
-      setView('vault');
     } catch (err: any) {
       let updatedVault = vault;
 
-      if (updatedVault) {
+      if (updatedVault && !createNew) {
         updatedVault = recordFailedAttempt(updatedVault);
 
         updatedVault = logActivity(
           updatedVault,
           'login_fail',
           'Failed login attempt',
-          deviceFingerprint
+          deviceId
         );
 
         const lockStatus = checkIfLocked(updatedVault);
@@ -170,13 +200,13 @@ function App() {
             updatedVault,
             'soft_lock',
             `Vault locked for ${lockStatus.remainingTime} minutes`,
-            deviceFingerprint
+            deviceId
           );
         }
 
         try {
           if (fileHandle && masterPassword) {
-            await saveVaultToFile(fileHandle, updatedVault, masterPassword, deviceFingerprint);
+            await saveVaultToFile(fileHandle, updatedVault, masterPassword, deviceId);
           }
         } catch (saveErr) {
           console.error('Failed to save after failed attempt', saveErr);
@@ -185,12 +215,12 @@ function App() {
         setVault(updatedVault);
       }
 
-      setError(err.message || 'Failed to unlock vault');
+      throw err;
     }
   };
 
   const handleAddPassword = async (entry: Omit<PasswordEntry, 'id' | 'createdAt' | 'updatedAt' | 'viewCount'>) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
 
     const newEntry: PasswordEntry = {
       ...entry,
@@ -206,11 +236,13 @@ function App() {
       updatedAt: Date.now(),
     };
 
+    updatedVault = logActivity(updatedVault, 'password_create', `Password created: ${entry.title}`, deviceId);
+
     await saveVault(updatedVault);
   };
 
   const handleUpdatePassword = async (id: string, updates: Partial<PasswordEntry>) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
 
     let updatedVault = {
       ...vault,
@@ -221,11 +253,15 @@ function App() {
     };
 
     const entry = updatedVault.passwords.find((p) => p.id === id);
+    if (entry) {
+      updatedVault = logActivity(updatedVault, 'password_update', `Password updated: ${entry.title}`, deviceId);
+    }
+
     await saveVault(updatedVault);
   };
 
   const handleDeletePassword = async (id: string) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
 
     const entry = vault.passwords.find((p) => p.id === id);
     if (!entry) return;
@@ -236,25 +272,34 @@ function App() {
       updatedAt: Date.now(),
     };
 
+    updatedVault = logActivity(updatedVault, 'password_delete', `Password deleted: ${entry.title}`, deviceId);
+
     await saveVault(updatedVault);
   };
 
   const handleViewPassword = async (id: string) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
 
-    let updatedVault = {
-      ...vault,
-      passwords: vault.passwords.map((p) =>
-        p.id === id ? { ...p, viewCount: p.viewCount + 1 } : p
-      ),
-      updatedAt: Date.now(),
-    };
+    requireReauth(async () => {
+      let updatedVault = {
+        ...vault,
+        passwords: vault.passwords.map((p) =>
+          p.id === id ? { ...p, viewCount: p.viewCount + 1 } : p
+        ),
+        updatedAt: Date.now(),
+      };
 
-    await saveVault(updatedVault);
+      const entry = updatedVault.passwords.find((p) => p.id === id);
+      if (entry) {
+        updatedVault = logActivity(updatedVault, 'password_view', `Password viewed: ${entry.title}`, deviceId);
+      }
+
+      await saveVault(updatedVault);
+    });
   };
 
   const handleAddCard = async (entry: Omit<CardEntry, 'id' | 'createdAt' | 'updatedAt'>) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
 
     const newEntry: CardEntry = {
       ...entry,
@@ -269,11 +314,13 @@ function App() {
       updatedAt: Date.now(),
     };
 
+    updatedVault = logActivity(updatedVault, 'card_create', `Card created: ${entry.cardName}`, deviceId);
+
     await saveVault(updatedVault);
   };
 
   const handleUpdateCard = async (id: string, updates: Partial<CardEntry>) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
 
     let updatedVault = {
       ...vault,
@@ -281,11 +328,19 @@ function App() {
       updatedAt: Date.now(),
     };
 
+    const card = updatedVault.cards.find((c) => c.id === id);
+    if (card) {
+      updatedVault = logActivity(updatedVault, 'card_update', `Card updated: ${card.cardName}`, deviceId);
+    }
+
     await saveVault(updatedVault);
   };
 
   const handleDeleteCard = async (id: string) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
+
+    const card = vault.cards.find((c) => c.id === id);
+    if (!card) return;
 
     let updatedVault = {
       ...vault,
@@ -293,11 +348,13 @@ function App() {
       updatedAt: Date.now(),
     };
 
+    updatedVault = logActivity(updatedVault, 'card_delete', `Card deleted: ${card.cardName}`, deviceId);
+
     await saveVault(updatedVault);
   };
 
   const handleAddFolder = async (folder: Omit<Folder, 'id' | 'createdAt' | 'updatedAt'>) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
 
     const newFolder: Folder = {
       ...folder,
@@ -312,11 +369,13 @@ function App() {
       updatedAt: Date.now(),
     };
 
+    updatedVault = logActivity(updatedVault, 'folder_create', `Folder created: ${folder.name}`, deviceId);
+
     await saveVault(updatedVault);
   };
 
   const handleUpdateFolder = async (id: string, updates: Partial<Folder>) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
 
     let updatedVault = {
       ...vault,
@@ -326,11 +385,16 @@ function App() {
       updatedAt: Date.now(),
     };
 
+    const folder = updatedVault.folders.find((f) => f.id === id);
+    if (folder) {
+      updatedVault = logActivity(updatedVault, 'folder_update', `Folder updated: ${folder.name}`, deviceId);
+    }
+
     await saveVault(updatedVault);
   };
 
   const handleDeleteFolder = async (id: string) => {
-    if (!vault || !authUser) return;
+    if (!vault) return;
 
     const folder = vault.folders.find((f) => f.id === id);
     if (!folder) return;
@@ -343,27 +407,29 @@ function App() {
       passwords: vault.passwords.map((p) =>
         p.folderId === id ? { ...p, folderId: folder.parentId ?? null } : p
       ),
+      cards: vault.cards.map((c) =>
+        c.folderId === id ? { ...c, folderId: folder.parentId ?? null } : c
+      ),
       updatedAt: Date.now(),
     };
+
+    updatedVault = logActivity(updatedVault, 'folder_delete', `Folder deleted: ${folder.name}`, deviceId);
 
     await saveVault(updatedVault);
   };
 
   const handleLogout = async () => {
-    if (authUser) {
-      await authService.logout(authUser.id, authUser.deviceId);
+    if (autoLockManager.current) {
+      autoLockManager.current.destroy();
+      autoLockManager.current = null;
     }
+
     secureWipe({ masterPassword });
     setMasterPassword('');
     setVault(null);
-    setAuthUser(null);
-    setView('login');
+    setView('auth');
     setError('');
-  };
-
-  const handleAuthenticated = (user: AuthUser) => {
-    setAuthUser(user);
-    setView('vault-auth');
+    sessionStorage.removeItem('vault_master_password');
   };
 
   if (!isSupported) {
@@ -382,59 +448,61 @@ function App() {
     );
   }
 
-  if (view === 'login') {
-    return <LoginRegister onAuthenticated={handleAuthenticated} />;
-  }
-
-  if (view === 'vault-auth') {
-    const lockStatus = vault ? checkIfLocked(vault) : { isLocked: false, remainingTime: 0 };
+  if (view === 'auth') {
+    const lockStatus = vault ? checkIfLocked(vault) : { isLocked: false, remainingTime: 0, lockUntil: 0 };
 
     return (
-      <Auth
-        onCreateVault={handleCreateVault}
-        onOpenVault={handleOpenVault}
-        isLocked={lockStatus.isLocked}
-        lockTimeRemaining={lockStatus.remainingTime}
-        error={error}
+      <SimpleAuth
+        onUnlock={handleUnlock}
+        lockStatus={{ isLocked: lockStatus.isLocked, lockUntil: lockStatus.isLocked ? Date.now() + (lockStatus.remainingTime * 60000) : 0 }}
       />
     );
   }
 
-  if (view === 'logs' && vault && authUser) {
-    return <ActivityLogs userId={authUser.id} localLogs={vault.activityLog} onBack={() => setView('vault')} />;
-  }
-
-  if (view === 'devices' && vault && authUser) {
+  if (view === 'logs' && vault) {
     return (
-      <DeviceManager
-        userId={authUser.id}
-        currentDeviceId={authUser.deviceId}
+      <ActivityLogs
+        userId={deviceId}
+        localLogs={vault.activityLog}
         onBack={() => setView('vault')}
       />
     );
   }
 
-  if (view === 'vault' && vault && authUser) {
+  if (view === 'vault' && vault) {
     return (
-      <PasswordManager
-        passwords={vault.passwords}
-        cards={vault.cards}
-        folders={vault.folders}
-        userId={authUser.id}
-        onAddPassword={handleAddPassword}
-        onUpdatePassword={handleUpdatePassword}
-        onDeletePassword={handleDeletePassword}
-        onViewPassword={handleViewPassword}
-        onAddCard={handleAddCard}
-        onUpdateCard={handleUpdateCard}
-        onDeleteCard={handleDeleteCard}
-        onAddFolder={handleAddFolder}
-        onUpdateFolder={handleUpdateFolder}
-        onDeleteFolder={handleDeleteFolder}
-        onLogout={handleLogout}
-        onShowLogs={() => setView('logs')}
-        onShowDevices={() => setView('devices')}
-      />
+      <>
+        <PasswordManager
+          passwords={vault.passwords}
+          cards={vault.cards}
+          folders={vault.folders}
+          userId={deviceId}
+          onAddPassword={handleAddPassword}
+          onUpdatePassword={handleUpdatePassword}
+          onDeletePassword={handleDeletePassword}
+          onViewPassword={handleViewPassword}
+          onAddCard={handleAddCard}
+          onUpdateCard={handleUpdateCard}
+          onDeleteCard={handleDeleteCard}
+          onAddFolder={handleAddFolder}
+          onUpdateFolder={handleUpdateFolder}
+          onDeleteFolder={handleDeleteFolder}
+          onLogout={handleLogout}
+          onShowLogs={() => setView('logs')}
+          onShowDevices={() => setView('logs')}
+        />
+
+        {showReauth && (
+          <ReauthPrompt
+            onAuthenticate={handleReauthSuccess}
+            onCancel={() => {
+              setShowReauth(false);
+              setReauthCallback(null);
+            }}
+            message="Re-authentication required to view sensitive data"
+          />
+        )}
+      </>
     );
   }
 

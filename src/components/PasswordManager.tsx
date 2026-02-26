@@ -400,7 +400,7 @@ export function PasswordManager({
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="flex">
-        <div className="w-64 border-r border-gray-200 fixed left-0 top-0 h-screen bg-white shadow-sm p-6 overflow-y-auto">
+        <div className="w-64 border-r border-gray-200 fixed left-0 top-0 h-screen bg-white shadow-sm p-4 md:p-6 overflow-y-auto hidden md:block">
           <div className="mb-8">
             <div className="flex items-center gap-3 mb-6">
               <Shield className="w-8 h-8 text-blue-600" />
@@ -441,7 +441,7 @@ export function PasswordManager({
           </div>
         </div>
 
-        <div className="flex-1 ml-64 p-8">
+        <div className="flex-1 md:ml-64 p-4 md:p-8">
           <div className="max-w-7xl mx-auto">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-4">
@@ -644,7 +644,7 @@ export function PasswordManager({
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {viewMode === 'passwords' ? (
                 filteredPasswords.length === 0 ? (
                   <div className="col-span-full bg-white rounded-lg p-12 text-center border border-gray-200 shadow-sm">
