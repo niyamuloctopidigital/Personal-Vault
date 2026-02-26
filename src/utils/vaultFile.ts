@@ -94,7 +94,20 @@ export async function loadVaultFromFile(
   }
 
   try {
+    console.log('=== VAULT FILE ANALYSIS ===');
+    console.log('Raw text length:', text.length);
+    console.log('First 200 chars:', text.substring(0, 200));
+
     const encrypted: EncryptedData = JSON.parse(text);
+
+    console.log('Encrypted data structure:', {
+      hasIv: !!encrypted.iv,
+      hasSalt: !!encrypted.salt,
+      hasCiphertext: !!encrypted.ciphertext,
+      ivLength: encrypted.iv?.length,
+      saltLength: encrypted.salt?.length,
+      ciphertextLength: encrypted.ciphertext?.length
+    });
 
     let decrypted: string;
     let vaultData: VaultData;
@@ -109,6 +122,7 @@ export async function loadVaultFromFile(
     console.log('Hardware fingerprint:', fingerprint.hash);
     console.log('Password length:', masterPassword.length);
 
+    // Try to use password as salt (maybe original version didn't use device ID at all?)
     const decryptionAttempts = [
       { id: deviceId, iterations: NEW_ITERATIONS, desc: 'new device ID with 1M iterations' },
       { id: deviceId, iterations: OLD_ITERATIONS, desc: 'new device ID with 700K iterations' },
@@ -116,6 +130,8 @@ export async function loadVaultFromFile(
       { id: fingerprint.hash, iterations: ORIGINAL_ITERATIONS, desc: 'old fingerprint with 100K iterations (original)' },
       { id: fingerprint.hash, iterations: OLD_ITERATIONS, desc: 'old fingerprint with 700K iterations' },
       { id: fingerprint.hash, iterations: NEW_ITERATIONS, desc: 'old fingerprint with 1M iterations' },
+      { id: '', iterations: ORIGINAL_ITERATIONS, desc: 'empty device ID with 100K iterations' },
+      { id: masterPassword, iterations: ORIGINAL_ITERATIONS, desc: 'password as ID with 100K iterations' },
     ];
 
     let lastError: Error | null = null;
