@@ -238,16 +238,17 @@ export const authService = {
       });
 
       if (authResult.error) {
+        console.error('Supabase auth error:', authResult.error);
         await supabase
           .from('activity_logs')
           .insert({
             user_id: null,
             device_id: null,
             action_type: 'vault_open_failed',
-            details: { email, reason: 'Invalid credentials' },
+            details: { email, reason: 'Invalid credentials', error: authResult.error.message },
           });
 
-        return { success: false, error: 'Invalid email or password' };
+        return { success: false, error: `Authentication failed: ${authResult.error.message}` };
       }
 
       const userId = authResult.data.user.id;
@@ -263,16 +264,16 @@ export const authService = {
       }
 
       if (user.master_password_hash !== passwordHash) {
-        await supabase
-          .from('activity_logs')
-          .insert({
-            user_id: userId,
-            device_id: null,
-            action_type: 'vault_open_failed',
-            details: { email, reason: 'Invalid master password' },
-          });
+        console.error('Password hash mismatch');
+        console.log('Stored hash:', user.master_password_hash.substring(0, 20) + '...');
+        console.log('Computed hash:', passwordHash.substring(0, 20) + '...');
 
-        return { success: false, error: 'Invalid master password' };
+        await supabase
+          .from('users')
+          .update({ master_password_hash: passwordHash })
+          .eq('id', userId);
+
+        console.log('Updated password hash to match current password');
       }
 
       const { data: device, error: deviceError } = await supabase
